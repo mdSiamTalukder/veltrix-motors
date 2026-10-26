@@ -1,6 +1,8 @@
+
 import "server-only";
 
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { del, put } from "@vercel/blob";
+import { readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   ALLOWED_IMAGE_MIME_TYPES,
@@ -16,6 +18,7 @@ const MIME_EXTENSION: Record<string, string> = {
 };
 
 const FILENAME_PATTERN = /^[A-Za-z0-9_-]{1,120}\.(jpg|png|webp|gif)$/;
+const BLOB_HOST_SUFFIX = ".public.blob.vercel-storage.com";
 
 export type StoredImage = {
   url: string;
@@ -75,22 +78,35 @@ export function detectImageMime(buffer: Buffer): string | null {
   return null;
 }
 
-export function isManagedImageUrl(url: string): boolean {
-  return url.startsWith(PUBLIC_UPLOAD_PREFIX);
+function isVercelBlobUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname.endsWith(BLOB_HOST_SUFFIX) &&
+      parsed.hostname.length > BLOB_HOST_SUFFIX.length
+    );
+  } catch {
+    return false;
+  }
 }
 
+export function isManagedImageUrl(url: string): boolean {
+  return url.startsWith(PUBLIC_UPLOAD_PREFIX) || isVercelBlobUrl(url);
+}
+
+/** Extract filenames only from legacy /uploads/ URLs. */
 export function imageUrlToFilename(url: string): string | null {
-  if (!isManagedImageUrl(url)) {
-    return null;
-  }
+  if (!url.startsWith(PUBLIC_UPLOAD_PREFIX)) return null;
 
   const filename = url.slice(PUBLIC_UPLOAD_PREFIX.length);
 
-  if (filename.includes("/") || filename.includes("\\")) {
-    return null;
-  }
-
-  if (!FILENAME_PATTERN.test(filename)) {
+  if (
+    filename.includes("/") ||
+    filename.includes("\\") ||
+    !FILENAME_PATTERN.test(filename)
+  ) {
     return null;
   }
 
@@ -98,20 +114,19 @@ export function imageUrlToFilename(url: string): string | null {
 }
 
 function filenameToPath(filename: string): string | null {
-  if (!FILENAME_PATTERN.test(filename)) {
-    return null;
-  }
+  if (!FILENAME_PATTERN.test(filename)) return null;
 
   const uploadDir = getUploadDir();
   const resolved = path.resolve(uploadDir, filename);
 
-  if (resolved !== path.join(uploadDir, filename)) {
-    return null;
-  }
+  if (resolved !== path.join(uploadDir, filename)) return null;
 
   return resolved;
 }
 
+/**
+ * New uploads are stored in Vercel Blob, not on the server's local disk.
+ */
 export async function saveUploadedImage(
   buffer: Buffer,
   mimeType: string,
@@ -126,46 +141,44 @@ export async function saveUploadedImage(
     throw new Error("Unsupported image type.");
   }
 
-  const uploadDir = getUploadDir();
-  await mkdir(uploadDir, { recursive: true });
-
-  const filename = `${crypto.randomUUID()}.${extension}`;
-  const filePath = path.join(/*turbopackIgnore: true*/ uploadDir, filename);
-
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-
-  try {
-    await writeFile(tempPath, buffer);
-    await rename(tempPath, filePath);
-  } catch (error) {
-    await unlink(tempPath).catch(() => undefined);
-    throw error;
+  if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.VERCEL) {
+    throw new Error(
+      "BLOB_READ_WRITE_TOKEN is missing. Configure your Vercel Blob credentials for local development.",
+    );
   }
 
+  const filename = `${crypto.randomUUID()}.${extension}`;
+
+  const blob = await put(`vehicles/${filename}`, buffer, {
+    access: "public",
+    contentType: mimeType,
+    addRandomSuffix: false,
+  });
+
   return {
-    url: `${PUBLIC_UPLOAD_PREFIX}${filename}`,
+    url: blob.url,
     filename,
     size: buffer.length,
     type: mimeType,
   };
 }
 
+/**
+ * Keep legacy local-file reads working for old /uploads/ URLs.
+ * New Blob URLs are served directly by Vercel Blob.
+ */
 export async function readUploadedImage(
   filename: string,
 ): Promise<{ buffer: Buffer; type: string } | null> {
   const filePath = filenameToPath(filename);
 
-  if (filePath === null) {
-    return null;
-  }
+  if (filePath === null) return null;
 
   try {
     const buffer = await readFile(/*turbopackIgnore: true*/ filePath);
     const type = detectImageMime(buffer);
 
-    if (!type) {
-      return null;
-    }
+    if (!type) return null;
 
     return { buffer, type };
   } catch {
@@ -173,18 +186,27 @@ export async function readUploadedImage(
   }
 }
 
+/**
+ * Delete managed images from Blob or legacy local storage.
+ */
 export async function deleteUploadedImage(url: string): Promise<boolean> {
+  if (isVercelBlobUrl(url)) {
+    try {
+      await del(url);
+      return true;
+    } catch (error) {
+      console.error("Failed to delete Vercel Blob image:", error);
+      return false;
+    }
+  }
+
   const filename = imageUrlToFilename(url);
 
-  if (filename === null) {
-    return false;
-  }
+  if (filename === null) return false;
 
   const filePath = filenameToPath(filename);
 
-  if (filePath === null) {
-    return false;
-  }
+  if (filePath === null) return false;
 
   try {
     await unlink(filePath);
@@ -194,7 +216,7 @@ export async function deleteUploadedImage(url: string): Promise<boolean> {
       return false;
     }
 
-    console.error(`Failed to delete uploaded image ${filename}:`, error);
+    console.error(`Failed to delete legacy uploaded image ${filename}:`, error);
     return false;
   }
 }
