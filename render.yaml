@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: veltrix-motors
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeploy: true
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
+      - key: VELTRIX_DATA_DIR
+        value: /var/data/data
+      - key: VELTRIX_UPLOAD_DIR
+        value: /var/data/uploads
+    disk:
+      name: veltrix-data
+      mountPath: /var/data
+      sizeGB: 1
