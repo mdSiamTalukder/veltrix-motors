@@ -1,9 +1,6 @@
 import "server-only";
 
-import {
-  readCollection,
-  updateCollection,
-} from "@/lib/json-store";
+import { sql } from "@/lib/db";
 import { deleteUploadedImage, isManagedImageUrl } from "@/lib/image-store";
 import { getVehicleImages } from "@/lib/vehicle-images";
 import type { FieldErrors } from "@/lib/api-helpers";
@@ -16,10 +13,6 @@ import {
 } from "@/lib/validation";
 import type { Vehicle, VehicleCondition, VehicleStatus } from "@/types";
 
-const VEHICLES_FILE = "vehicles.json";
-
-const SEED_TIMESTAMP = "2024-01-01T00:00:00.000Z";
-
 export const VEHICLE_STATUSES: VehicleStatus[] = [
   "Available",
   "Reserved",
@@ -27,123 +20,6 @@ export const VEHICLE_STATUSES: VehicleStatus[] = [
 ];
 
 export const VEHICLE_CONDITIONS: VehicleCondition[] = ["New", "Used"];
-
-const seedVehicles: Vehicle[] = [
-  {
-    id: "car-001",
-    brand: "Mercedes-Benz",
-    model: "C-Class",
-    category: "Luxury Sedan",
-    year: 2023,
-    price: 8500000,
-    mileage: 12000,
-    transmission: "Automatic",
-    fuel: "Petrol",
-    condition: "Used",
-    status: "Available",
-    published: true,
-    featured: true,
-    image:
-      "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?auto=format&fit=crop&w=1000&q=85",
-    createdAt: SEED_TIMESTAMP,
-    updatedAt: SEED_TIMESTAMP,
-  },
-  {
-    id: "car-002",
-    brand: "BMW",
-    model: "5 Series",
-    category: "Executive Sedan",
-    year: 2022,
-    price: 9200000,
-    mileage: 18500,
-    transmission: "Automatic",
-    fuel: "Petrol",
-    condition: "Used",
-    status: "Available",
-    published: true,
-    featured: true,
-    image:
-      "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=1000&q=85",
-    createdAt: SEED_TIMESTAMP,
-    updatedAt: SEED_TIMESTAMP,
-  },
-  {
-    id: "car-003",
-    brand: "Porsche",
-    model: "911 Carrera",
-    category: "Sports Car",
-    year: 2024,
-    price: 28000000,
-    mileage: 4500,
-    transmission: "Automatic",
-    fuel: "Petrol",
-    condition: "Used",
-    status: "Available",
-    published: true,
-    featured: true,
-    image:
-      "https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1000&q=85",
-    createdAt: SEED_TIMESTAMP,
-    updatedAt: SEED_TIMESTAMP,
-  },
-  {
-    id: "car-004",
-    brand: "Tesla",
-    model: "Model 3",
-    category: "Electric Sedan",
-    year: 2024,
-    price: 6500000,
-    mileage: 6000,
-    transmission: "Automatic",
-    fuel: "Electric",
-    condition: "Used",
-    status: "Available",
-    published: true,
-    featured: false,
-    image:
-      "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=1000&q=85",
-    createdAt: SEED_TIMESTAMP,
-    updatedAt: SEED_TIMESTAMP,
-  },
-  {
-    id: "car-005",
-    brand: "Land Rover",
-    model: "Range Rover Sport",
-    category: "Luxury SUV",
-    year: 2023,
-    price: 19500000,
-    mileage: 14000,
-    transmission: "Automatic",
-    fuel: "Diesel",
-    condition: "Used",
-    status: "Available",
-    published: true,
-    featured: false,
-    image:
-      "https://images.unsplash.com/photo-1519641471654-76ce0107ad1b?auto=format&fit=crop&w=1000&q=85",
-    createdAt: SEED_TIMESTAMP,
-    updatedAt: SEED_TIMESTAMP,
-  },
-  {
-    id: "car-006",
-    brand: "Honda",
-    model: "Civic",
-    category: "Sedan",
-    year: 2022,
-    price: 4200000,
-    mileage: 22000,
-    transmission: "Automatic",
-    fuel: "Petrol",
-    condition: "Used",
-    status: "Available",
-    published: true,
-    featured: false,
-    image:
-      "https://images.unsplash.com/photo-1590362891991-f776e747a588?auto=format&fit=crop&w=1000&q=85",
-    createdAt: SEED_TIMESTAMP,
-    updatedAt: SEED_TIMESTAMP,
-  },
-];
 
 export type VehicleSort =
   | "featured"
@@ -183,8 +59,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readVehicleCollection() {
-  return readCollection<Vehicle[]>(VEHICLES_FILE, seedVehicles);
+type VehicleRow = {
+  id: string;
+  brand: string;
+  model: string;
+  category: string | null;
+  year: number | string;
+  price: number | string;
+  mileage: number | string;
+  transmission: string;
+  fuel: string;
+  condition: VehicleCondition;
+  status: VehicleStatus;
+  published: boolean;
+  featured: boolean;
+  image: string;
+  images: string[] | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
+function toVehicle(row: VehicleRow): Vehicle {
+  return {
+    id: row.id,
+    brand: row.brand,
+    model: row.model,
+    category: row.category ?? "General",
+    year: Number(row.year),
+    price: Number(row.price),
+    mileage: Number(row.mileage),
+    transmission: row.transmission,
+    fuel: row.fuel,
+    condition: row.condition,
+    status: row.status,
+    published: row.published,
+    featured: row.featured,
+    image: row.image,
+    images: row.images ?? [],
+    createdAt:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : new Date(row.created_at).toISOString(),
+    updatedAt:
+      row.updated_at instanceof Date
+        ? row.updated_at.toISOString()
+        : new Date(row.updated_at).toISOString(),
+  };
 }
 
 function isPublishedVehicle(vehicle: Vehicle) {
@@ -192,8 +112,16 @@ function isPublishedVehicle(vehicle: Vehicle) {
 }
 
 export async function getAllVehicles(): Promise<Vehicle[]> {
-  const vehicles = await readVehicleCollection();
-  return Array.isArray(vehicles) ? vehicles : [];
+  const rows = (await sql`
+    SELECT
+      id, brand, model, category, year, price, mileage,
+      transmission, fuel, condition, status, published,
+      featured, image, images, created_at, updated_at
+    FROM vehicles
+    ORDER BY created_at DESC
+  `) as unknown as VehicleRow[];
+
+  return rows.map(toVehicle);
 }
 
 export async function getVehicleById(id: string): Promise<Vehicle | null> {
@@ -212,6 +140,7 @@ function matchesQuery(vehicle: Vehicle, query: VehicleQuery): boolean {
   if (query.search) {
     const haystack =
       `${vehicle.brand} ${vehicle.model} ${vehicle.category}`.toLowerCase();
+
     if (!haystack.includes(query.search.toLowerCase())) {
       return false;
     }
@@ -290,17 +219,23 @@ function sortVehicles(vehicles: Vehicle[], sort: VehicleSort): Vehicle[] {
   switch (sort) {
     case "price-low":
       return sorted.sort((a, b) => a.price - b.price);
+
     case "price-high":
       return sorted.sort((a, b) => b.price - a.price);
+
     case "year-new":
       return sorted.sort((a, b) => b.year - a.year);
+
     case "year-old":
       return sorted.sort((a, b) => a.year - b.year);
+
     case "featured":
     default:
       return sorted.sort((a, b) => {
         const featured = Number(b.featured) - Number(a.featured);
+
         if (featured !== 0) return featured;
+
         return b.year - a.year;
       });
   }
@@ -367,12 +302,14 @@ export function parseVehicleInput(
 
   if (has("brand") || !partial) {
     const brand = sanitizeText(raw.brand, 60);
+
     if (brand === "") errors.brand = "Brand is required.";
     else value.brand = brand;
   }
 
   if (has("model") || !partial) {
     const model = sanitizeText(raw.model, 80);
+
     if (model === "") errors.model = "Model is required.";
     else value.model = model;
   }
@@ -383,6 +320,7 @@ export function parseVehicleInput(
 
   if (has("year") || !partial) {
     const year = Number(raw.year);
+
     if (
       !Number.isInteger(year) ||
       year < 1900 ||
@@ -396,6 +334,7 @@ export function parseVehicleInput(
 
   if (has("price") || !partial) {
     const price = Number(raw.price);
+
     if (!Number.isFinite(price) || price <= 0 || price > 1_000_000_000_000) {
       errors.price = "Price must be a positive number.";
     } else {
@@ -405,6 +344,7 @@ export function parseVehicleInput(
 
   if (has("mileage") || !partial) {
     const mileage = Number(raw.mileage);
+
     if (!Number.isFinite(mileage) || mileage < 0 || mileage > 10_000_000) {
       errors.mileage = "Mileage must be zero or a positive number.";
     } else {
@@ -414,18 +354,24 @@ export function parseVehicleInput(
 
   if (has("transmission") || !partial) {
     const transmission = sanitizeText(raw.transmission, 40);
-    if (transmission === "") errors.transmission = "Transmission is required.";
-    else value.transmission = transmission;
+
+    if (transmission === "") {
+      errors.transmission = "Transmission is required.";
+    } else {
+      value.transmission = transmission;
+    }
   }
 
   if (has("fuel") || !partial) {
     const fuel = sanitizeText(raw.fuel, 40);
+
     if (fuel === "") errors.fuel = "Fuel type is required.";
     else value.fuel = fuel;
   }
 
   if (has("condition")) {
     const condition = sanitizeText(raw.condition, 10);
+
     if (VEHICLE_CONDITIONS.includes(condition as VehicleCondition)) {
       value.condition = condition as VehicleCondition;
     } else if (condition !== "") {
@@ -435,6 +381,7 @@ export function parseVehicleInput(
 
   if (has("status")) {
     const status = sanitizeText(raw.status, 20);
+
     if (VEHICLE_STATUSES.includes(status as VehicleStatus)) {
       value.status = status as VehicleStatus;
     } else {
@@ -504,7 +451,6 @@ export async function createVehicle(
   }
 
   const now = new Date().toISOString();
-
   const images = parsed.value.images ?? [];
 
   const vehicle: Vehicle = {
@@ -527,12 +473,31 @@ export async function createVehicle(
     updatedAt: now,
   };
 
-  await updateCollection<Vehicle[]>(VEHICLES_FILE, seedVehicles, (current) => [
-    vehicle,
-    ...(Array.isArray(current) ? current : []),
-  ]);
+  const rows = (await sql`
+    INSERT INTO vehicles (
+      id, brand, model, category, year, price, mileage,
+      transmission, fuel, condition, status, published,
+      featured, image, images, created_at, updated_at
+    )
+    VALUES (
+      ${vehicle.id}, ${vehicle.brand}, ${vehicle.model}, ${vehicle.category},
+      ${vehicle.year}, ${vehicle.price}, ${vehicle.mileage},
+      ${vehicle.transmission}, ${vehicle.fuel}, ${vehicle.condition},
+      ${vehicle.status}, ${vehicle.published}, ${vehicle.featured},
+      ${vehicle.image}, ${JSON.stringify(vehicle.images)}::jsonb,
+      ${vehicle.createdAt}, ${vehicle.updatedAt}
+    )
+    RETURNING
+      id, brand, model, category, year, price, mileage,
+      transmission, fuel, condition, status, published,
+      featured, image, images, created_at, updated_at
+  `) as unknown as VehicleRow[];
 
-  return { ok: true, vehicle };
+  if (!rows[0]) {
+    throw new Error("Vehicle could not be created.");
+  }
+
+  return { ok: true, vehicle: toVehicle(rows[0]) };
 }
 
 export async function updateVehicle(
@@ -548,44 +513,60 @@ export async function updateVehicle(
     return parsed;
   }
 
-  const holder: { value: Vehicle | null } = { value: null };
+  const existing = await getVehicleById(id);
 
-  await updateCollection<Vehicle[]>(VEHICLES_FILE, seedVehicles, (current) => {
-    const vehicles = Array.isArray(current) ? current : [];
-
-    return vehicles.map((vehicle) => {
-      if (vehicle.id !== id) return vehicle;
-
-      holder.value = {
-        ...vehicle,
-        ...parsed.value,
-        id: vehicle.id,
-        createdAt: vehicle.createdAt,
-        updatedAt: new Date().toISOString(),
-      };
-
-      return holder.value;
-    });
-  });
-
-  if (!holder.value) {
+  if (!existing) {
     return { ok: false, errors: {}, notFound: true };
   }
 
-  return { ok: true, vehicle: holder.value };
+  const updated: Vehicle = {
+    ...existing,
+    ...parsed.value,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const rows = (await sql`
+    UPDATE vehicles
+    SET
+      brand = ${updated.brand},
+      model = ${updated.model},
+      category = ${updated.category},
+      year = ${updated.year},
+      price = ${updated.price},
+      mileage = ${updated.mileage},
+      transmission = ${updated.transmission},
+      fuel = ${updated.fuel},
+      condition = ${updated.condition},
+      status = ${updated.status},
+      published = ${updated.published},
+      featured = ${updated.featured},
+      image = ${updated.image},
+      images = ${JSON.stringify(updated.images ?? [])}::jsonb,
+      updated_at = ${updated.updatedAt}
+    WHERE id = ${id}
+    RETURNING
+      id, brand, model, category, year, price, mileage,
+      transmission, fuel, condition, status, published,
+      featured, image, images, created_at, updated_at
+  `) as unknown as VehicleRow[];
+
+  if (!rows[0]) {
+    return { ok: false, errors: {}, notFound: true };
+  }
+
+  return { ok: true, vehicle: toVehicle(rows[0]) };
 }
 
 export async function deleteVehicle(id: string): Promise<boolean> {
-  let removed = false;
+  const rows = (await sql`
+    DELETE FROM vehicles
+    WHERE id = ${id}
+    RETURNING id
+  `) as unknown as { id: string }[];
 
-  await updateCollection<Vehicle[]>(VEHICLES_FILE, seedVehicles, (current) => {
-    const vehicles = Array.isArray(current) ? current : [];
-    const next = vehicles.filter((vehicle) => vehicle.id !== id);
-    removed = next.length !== vehicles.length;
-    return next;
-  });
-
-  return removed;
+  return rows.length > 0;
 }
 
 export async function getVehicleCounts() {

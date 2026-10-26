@@ -1,6 +1,7 @@
+
 import "server-only";
 
-import { readCollection, updateCollection } from "@/lib/json-store";
+import { sql } from "@/lib/db";
 import type { FieldErrors } from "@/lib/api-helpers";
 import {
   isValidEmail,
@@ -9,8 +10,6 @@ import {
   sanitizeText,
 } from "@/lib/validation";
 import type { ContactSubmission } from "@/types";
-
-const CONTACTS_FILE = "contacts.json";
 
 type ContactInput = {
   name: string;
@@ -24,8 +23,35 @@ type ContactParseResult =
   | { ok: true; value: ContactInput }
   | { ok: false; errors: FieldErrors };
 
+type ContactRow = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  subject: string;
+  message: string;
+  status: string;
+  created_at: string | Date;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toContactSubmission(row: ContactRow): ContactSubmission {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    subject: row.subject,
+    message: row.message,
+    status: row.status as ContactSubmission["status"],
+    createdAt:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : new Date(row.created_at).toISOString(),
+  };
 }
 
 export function parseContactInput(raw: unknown): ContactParseResult {
@@ -59,41 +85,49 @@ export function parseContactInput(raw: unknown): ContactParseResult {
 export async function createContact(
   value: ContactInput,
 ): Promise<ContactSubmission> {
-  const submission: ContactSubmission = {
-    id: `msg-${crypto.randomUUID()}`,
-    name: value.name,
-    email: value.email,
-    phone: value.phone,
-    subject: value.subject,
-    message: value.message,
-    status: "new",
-    createdAt: new Date().toISOString(),
-  };
+  const id = `msg-${crypto.randomUUID()}`;
+  const createdAt = new Date();
 
-  await updateCollection<ContactSubmission[]>(CONTACTS_FILE, [], (current) => [
-    submission,
-    ...(Array.isArray(current) ? current : []),
-  ]);
+  const rows = (await sql`
+    INSERT INTO contacts (
+      id, name, email, phone, subject, message, status, created_at
+    )
+    VALUES (
+      ${id},
+      ${value.name},
+      ${value.email},
+      ${value.phone},
+      ${value.subject},
+      ${value.message},
+      'new',
+      ${createdAt.toISOString()}
+    )
+    RETURNING id, name, email, phone, subject, message, status, created_at
+  `) as unknown as ContactRow[];
 
-  return submission;
+  if (!rows[0]) {
+    throw new Error("Failed to create contact submission.");
+  }
+
+  return toContactSubmission(rows[0]);
 }
 
 export async function listContacts(): Promise<ContactSubmission[]> {
-  const contacts = await readCollection<ContactSubmission[]>(CONTACTS_FILE, []);
-  return (Array.isArray(contacts) ? contacts : []).sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  );
+  const rows = (await sql`
+    SELECT id, name, email, phone, subject, message, status, created_at
+    FROM contacts
+    ORDER BY created_at DESC
+  `) as unknown as ContactRow[];
+
+  return rows.map(toContactSubmission);
 }
 
 export async function deleteContact(id: string): Promise<boolean> {
-  let removed = false;
+  const rows = (await sql`
+    DELETE FROM contacts
+    WHERE id = ${id}
+    RETURNING id
+  `) as unknown as { id: string }[];
 
-  await updateCollection<ContactSubmission[]>(CONTACTS_FILE, [], (current) => {
-    const list = Array.isArray(current) ? current : [];
-    const next = list.filter((contact) => contact.id !== id);
-    removed = next.length !== list.length;
-    return next;
-  });
-
-  return removed;
+  return rows.length > 0;
 }
